@@ -1,0 +1,22 @@
+# Multi-Task Training Framework Dependencies
+# ============================================
+
+# Core
+torch>=1.12.0
+torchvision>=0.13.0
+
+# COCO Dataset
+pycocotools>=2.0.6
+Pillow>=9.0.0
+
+# Logging
+tensorboard>=2.10.0
+
+# Utilities
+numpy>=1.22.0
+tqdm>=4.64.0
+matplotlib>=3.5.0
+
+# Optional: for Jupyter notebook visualization
+# jupyter>=1.0.0
+# ipywidgets>=7.7.0
