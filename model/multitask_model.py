@@ -104,19 +104,39 @@ class MultiTaskModel(nn.Module):
             sampling_ratio=2,
         )
 
-        # Build Mask R-CNN with keypoint support
-        # MaskRCNN internally creates mask and keypoint predictors
+        # Build Mask R-CNN
+        # NOTE: MaskRCNN.__init__ in torchvision 0.23.0 does NOT pass
+        # keypoint_* kwargs through to RoIHeads (they are silently ignored).
+        # We must manually assign keypoint components after construction.
         self.model = MaskRCNN(
             backbone=backbone,
             num_classes=cfg.num_classes,
             rpn_anchor_generator=anchor_generator,
             box_roi_pool=roi_pooler,
             mask_roi_pool=mask_roi_pooler,
-            keypoint_roi_pool=keypoint_roi_pooler,
-            num_keypoints=cfg.num_keypoints,
             min_size=cfg.min_size,
             max_size=cfg.max_size,
         )
+
+        # ── Manually set up Keypoint Head ─────────────────────
+        # (MaskRCNN ignores keypoint_* kwargs, so we assign them directly)
+        # Use torchvision's standard KeypointRCNN components for compatibility
+        from torchvision.models.detection.keypoint_rcnn import (
+            KeypointRCNNHeads as TorchKeypointRCNNHeads,
+            KeypointRCNNPredictor as TorchKeypointRCNNPredictor,
+        )
+
+        out_channels = backbone.out_channels  # 256 for ResNet-FPN
+        keypoint_layers = (512,) * 8  # Standard: 8 conv layers of 512 channels
+        keypoint_head = TorchKeypointRCNNHeads(out_channels, keypoint_layers)
+        keypoint_predictor = TorchKeypointRCNNPredictor(
+            in_channels=512,  # Must match keypoint_layers[-1]
+            num_keypoints=cfg.num_keypoints,
+        )
+
+        self.model.roi_heads.keypoint_roi_pool = keypoint_roi_pooler
+        self.model.roi_heads.keypoint_head = keypoint_head
+        self.model.roi_heads.keypoint_predictor = keypoint_predictor
 
         # Loss weights for multi-task learning
         self.loss_weights = {
@@ -238,18 +258,217 @@ def build_multitask_model(cfg) -> MultiTaskModel:
 
 
 if __name__ == "__main__":
+    import os
+    import argparse
+
+    # ── Parse args FIRST to decide whether to download pretrained backbone ──
+    parser = argparse.ArgumentParser(description="Multi-task model test script")
+    parser.add_argument(
+        "--checkpoint", "-c", type=str, default=None,
+        help="Path to .pth checkpoint file. If not provided, uses pretrained backbone weights only."
+    )
+    parser.add_argument(
+        "--device", "-d", type=str, default=None,
+        help="Device to run inference on (e.g. 'cpu', 'cuda:0'). Auto-detected if not set."
+    )
+    args = parser.parse_args()
+
+    # Auto-detect device
+    if args.device:
+        device = torch.device(args.device)
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    # ── Build model ──────────────────────────────────────────
     from config import Config
     cfg = Config()
-    model = build_multitask_model(cfg)
-    print(f"Multi-Task Model built successfully")
-    print(f"  Backbone: {cfg.backbone_name}")
-    print(f"  Num classes: {cfg.num_classes}")
-    print(f"  Num keypoints: {cfg.num_keypoints}")
-    print(f"  Loss weights: RPN={cfg.loss_weight_rpn}, Box={cfg.loss_weight_box}, "
-          f"Mask={cfg.loss_weight_mask}, KP={cfg.loss_weight_keypoint}")
 
-    # Count parameters
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"  Total parameters: {total_params:,}")
-    print(f"  Trainable parameters: {trainable_params:,}")
+    # If checkpoint is provided, skip downloading pretrained backbone
+    # (checkpoint contains ALL weights including backbone)
+    if args.checkpoint:
+        print(f"Checkpoint provided: {args.checkpoint}")
+        print("Skipping pretrained backbone download, will load from checkpoint.")
+        cfg.pretrained_backbone = False
+
+    model = build_multitask_model(cfg)
+
+    # ── Load checkpoint weights ──────────────────────────────
+    if args.checkpoint:
+        ckpt_path = args.checkpoint
+        if not os.path.isfile(ckpt_path):
+            raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+        print(f"Loading checkpoint: {ckpt_path}")
+        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+
+        # Handle different checkpoint formats
+        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+            state_dict = checkpoint["model_state_dict"]
+            epoch = checkpoint.get("epoch", "?")
+            print(f"  Checkpoint epoch: {epoch}")
+        elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+            state_dict = checkpoint["state_dict"]
+        else:
+            state_dict = checkpoint
+
+        # Load weights (strict=False to allow partial matches)
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        if missing:
+            print(f"  Missing keys ({len(missing)}): {missing[:5]}{'...' if len(missing) > 5 else ''}")
+        if unexpected:
+            print(f"  Unexpected keys ({len(unexpected)}): {unexpected[:5]}{'...' if len(unexpected) > 5 else ''}")
+        print("  Checkpoint loaded successfully!")
+    else:
+        print("No checkpoint provided (--checkpoint), using pretrained backbone weights only.")
+
+    model.to(device)
+
+    # ── Debug: check keypoint head status ─────────────────────
+    print(f"\n=== Model Keypoint Head Debug ===")
+    print(f"  roi_heads.keypoint_predictor is None: {model.model.roi_heads.keypoint_predictor is None}")
+    print(f"  roi_heads.keypoint_roi_pool is None: {model.model.roi_heads.keypoint_roi_pool is None}")
+    if model.model.roi_heads.keypoint_predictor is not None:
+        for name, param in model.model.roi_heads.keypoint_predictor.named_parameters():
+            print(f"  keypoint_predictor.{name}: shape={param.shape}, mean={param.data.mean().item():.6f}")
+    print()
+
+    import cv2
+    import numpy as np
+    import torchvision.transforms.functional as F
+
+    # 1. Load image (resolve path relative to project root)
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    test_img_path = os.path.join(project_root, "test.jpg")
+    test_input = cv2.imread(test_img_path)
+    if test_input is None:
+        raise FileNotFoundError(f"Cannot load {test_img_path}")
+
+    # 2. BGR -> RGB, then convert to float tensor [C, H, W]
+    test_input_rgb = cv2.cvtColor(test_input, cv2.COLOR_BGR2RGB)
+    test_input_tensor = F.to_tensor(test_input_rgb).to(device)  # [C, H, W], float32 [0, 1]
+
+    # 3. Set model to eval mode and run inference
+    #    MaskRCNN expects a list of image tensors
+    model.eval()
+    with torch.no_grad():
+        res = model([test_input_tensor])
+
+    # 4. Print detection results
+    pred = res[0]
+    scores = pred["scores"]
+    print(f"\n=== Detection Results ===")
+    print(f"Prediction keys: {list(pred.keys())}")
+    print(f"Detected {len(scores)} instances")
+    print(f"Has keypoints: {'keypoints' in pred}")
+
+    if len(scores) > 0:
+        # Print top-5 detections regardless of threshold
+        topk = min(5, len(scores))
+        top_scores, top_indices = scores.topk(topk)
+        print(f"\nTop-{topk} detections:")
+        for rank, (score, i) in enumerate(zip(top_scores, top_indices)):
+            label = pred["labels"][i].item()
+            box = pred["boxes"][i].tolist()
+            print(f"  [{rank}] label={label}, score={score:.3f}, box={[round(v, 1) for v in box]}")
+
+            # Print keypoints if available
+            if "keypoints" in pred:
+                kp = pred["keypoints"][i]  # (K, 3): x, y, visibility
+                visible = kp[:, 2] > 0.1
+                num_visible = visible.sum().item()
+                print(f"       keypoints: {num_visible}/{kp.shape[0]} visible")
+    else:
+        print("No detections found! The model may need training or a valid checkpoint.")
+
+    # 5. Visualize and save results
+    from PIL import Image
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+
+    # COCO person skeleton
+    SKELETON = [
+        (0, 1), (0, 2), (1, 3), (2, 4),
+        (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
+        (5, 11), (6, 12), (11, 12),
+        (11, 13), (13, 15), (12, 14), (14, 16),
+    ]
+
+    INSTANCE_COLORS = [
+        (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0),
+        (255, 0, 255), (0, 255, 255), (128, 0, 0), (0, 128, 0),
+    ]
+
+    score_threshold = 0.5
+    keep = scores > score_threshold
+    keep_indices = keep.nonzero(as_tuple=True)[0]
+
+    output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "test_output")
+    os.makedirs(output_dir, exist_ok=True)
+
+    # --- Draw Instance Segmentation ---
+    fig, ax = plt.subplots(1, figsize=(10, 10))
+    ax.imshow(test_input_rgb)
+    ax.set_title("Instance Segmentation + Keypoints")
+    ax.axis("off")
+
+    for i in keep_indices:
+        color = INSTANCE_COLORS[i % len(INSTANCE_COLORS)]
+        color_norm = tuple(c / 255.0 for c in color)
+
+        # Draw bounding box
+        x1, y1, x2, y2 = pred["boxes"][i].tolist()
+        rect = mpatches.Rectangle(
+            (x1, y1), x2 - x1, y2 - y1,
+            linewidth=2, edgecolor=color_norm, facecolor="none",
+        )
+        ax.add_patch(rect)
+        label_id = pred["labels"][i].item()
+        score_val = pred["scores"][i].item()
+        ax.text(
+            x1, y1 - 5, f"cls={label_id} score={score_val:.2f}",
+            fontsize=8, color="white",
+            bbox=dict(boxstyle="round,pad=0.2", facecolor=(*color_norm, 0.7)),
+        )
+
+        # Draw mask overlay
+        if "masks" in pred:
+            mask = pred["masks"][i, 0].cpu().numpy()
+            colored_mask = np.zeros((*mask.shape, 4))
+            colored_mask[mask > 0.5, 0] = color[0] / 255.0
+            colored_mask[mask > 0.5, 1] = color[1] / 255.0
+            colored_mask[mask > 0.5, 2] = color[2] / 255.0
+            colored_mask[mask > 0.5, 3] = 0.4
+            ax.imshow(colored_mask)
+
+        # Draw keypoints + skeleton
+        if "keypoints" in pred:
+            kp = pred["keypoints"][i].cpu()  # (K, 3)
+            kp_coords = kp[:, :2].numpy()
+            kp_vis = kp[:, 2].numpy()
+
+            # Skeleton lines
+            for start, end in SKELETON:
+                if start < len(kp_vis) and end < len(kp_vis):
+                    if kp_vis[start] > 0.1 and kp_vis[end] > 0.1:
+                        ax.plot(
+                            [kp_coords[start, 0], kp_coords[end, 0]],
+                            [kp_coords[start, 1], kp_coords[end, 1]],
+                            color=color_norm, linewidth=2,
+                        )
+
+            # Keypoint dots
+            for j in range(len(kp_coords)):
+                if kp_vis[j] > 0.1:
+                    ax.plot(
+                        kp_coords[j, 0], kp_coords[j, 1], "o",
+                        markersize=4, markerfacecolor="red",
+                        markeredgecolor="white", markeredgewidth=0.5,
+                    )
+
+    fig.tight_layout()
+    save_path = os.path.join(output_dir, "test_result.png")
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"\nVisualization saved to: {save_path}")

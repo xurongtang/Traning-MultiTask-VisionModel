@@ -199,3 +199,29 @@ python train.py --device cuda:0,1
 ## License
 
 This project is for research and educational purposes.
+
+## 修复日志
+
+### 1. 修复无法得到特征点的模型 Bug（2026-04-05）
+
+**问题**：模型推理结果中缺少 `keypoints` 和 `keypoints_scores`，`roi_heads.keypoint_predictor` 始终为 `None`。
+
+**根因**：`model/multitask_model.py` 中使用 `MaskRCNN` 构造模型，但 torchvision v0.23.0 的 `MaskRCNN.__init__` 不接受也不传递 `keypoint_*` 参数到 `RoIHeads`（仅处理 `mask_*` 参数），导致关键点检测头未被创建。
+
+**修复方案**：在 `MaskRCNN` 构造完成后，手动创建并分配关键点检测组件：
+
+```python
+from torchvision.models.detection.keypoint_rcnn import (
+    KeypointRCNNHeads, KeypointRCNNPredictor
+)
+
+# 使用 torchvision 标准 KeypointRCNN 架构
+keypoint_head = KeypointRCNNHeads(out_channels, (512,) * 8)
+keypoint_predictor = KeypointRCNNPredictor(in_channels=512, num_keypoints=17)
+
+self.model.roi_heads.keypoint_roi_pool = keypoint_roi_pooler
+self.model.roi_heads.keypoint_head = keypoint_head
+self.model.roi_heads.keypoint_predictor = keypoint_predictor
+```
+
+**验证**：修复后推理输出包含 `keypoints`（shape: `[N, 17, 3]`）和 `keypoints_scores`，关键点检测正常工作。
