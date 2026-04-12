@@ -29,7 +29,7 @@ class Config:
     backbone_name: str = "resnet50"
     pretrained_backbone: bool = True
     trainable_layers: int = 3  # Number of trainable backbone layers
-    num_classes: int = 91  # COCO: 80 thing classes + 11 (torchvision convention)
+    num_classes: int = 2   # Person-only: 1 class (person) + 1 background
     num_keypoints: int = 17  # COCO person keypoints
     keypoint_names: tuple = (
         "nose", "left_eye", "right_eye", "left_ear", "right_ear",

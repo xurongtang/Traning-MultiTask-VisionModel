@@ -225,3 +225,62 @@ self.model.roi_heads.keypoint_predictor = keypoint_predictor
 ```
 
 **验证**：修复后推理输出包含 `keypoints`（shape: `[N, 17, 3]`）和 `keypoints_scores`，关键点检测正常工作。
+
+### 2. 使用全量数据集和标签进行训练，12 epoch
+
+使用 COCO2017 全部 80 个类别进行多任务训练，训练 12 个 epoch 后的推理结果如下：
+
+**实例分割效果**（正常）：
+![alt text](asset/epoch_012_instance_seg.png)
+
+**关键点检测效果**（异常）：
+![alt text](asset/epoch_012_keypoints.png)
+
+**问题分析**：关键点检测结果出现了大量误检和异常关键点。根本原因是 COCO 的关键点标注**仅针对 "person" 类别**，其他 79 个类别（如汽车、动物、家具等）并没有关键点标注。当模型在全量数据上训练时：
+
+- 非 person 类别的实例没有关键点监督信号，但模型仍会尝试为其预测关键点
+- 这导致关键点检测头接收到大量矛盾的梯度信号（person 有标注 vs. 非 person 全为 0）
+- 最终模型的关键点检测能力被严重削弱，推理时产生大量虚检
+
+**结论**：多任务联合训练中，关键点检测任务应当限定在 person 类别上进行。
+
+### 3. 修改为仅使用 "person" 单类别进行多任务训练
+
+针对上述问题，将训练数据和模型配置修改为仅针对 **person** 类别：
+
+#### 修改内容
+
+| 文件 | 修改说明 |
+|------|----------|
+| `config.py` | `num_classes` 从 `91` 改为 `2`（person+背景） |
+| `datasets/coco_dataset.py` | 新增 `person_only` 参数（默认 `True`），仅加载包含 person 的图像，过滤非 person 标注，标签重映射为 `1` |
+
+#### 具体改动
+
+**`config.py`**：
+```python
+# 修改前
+num_classes: int = 91  # COCO: 80 thing classes + 11 (torchvision convention)
+
+# 修改后
+num_classes: int = 2   # Person-only: 1 class (person) + 1 background
+```
+
+**`datasets/coco_dataset.py`**：
+```python
+class CocoMultiTaskDataset:
+    def __init__(self, ..., person_only: bool = True):
+        # person_only 模式下：
+        # 1. 通过 getCatIds(catNms=["person"]) 获取 person 类别 ID
+        # 2. 仅筛选包含 person 的图像 (getImgIds(catIds=cat_ids))
+        # 3. 过滤非 person 的标注，标签统一重映射为 1
+```
+
+#### 优势
+
+- **关键点检测更准确**：所有训练样本都是 person 实例，关键点标注信号一致
+- **训练效率更高**：数据量从 ~118K 张缩减到 ~65K 张（仅含 person 的图像），训练更快
+- **模型更轻量**：分类头从 91 类减少到 2 类，参数更少
+</task_progress>
+</task_progress>
+</write_to_file>

@@ -50,12 +50,14 @@ class CocoMultiTaskDataset(torch.utils.data.Dataset):
         kp_ann_file: str,
         transforms=None,
         num_keypoints: int = 17,
+        person_only: bool = True,
     ):
         super().__init__()
 
         self.img_root = img_root
         self.transforms = transforms
         self.num_keypoints = num_keypoints
+        self.person_only = person_only
 
         # Load instance segmentation annotations
         print(f"Loading instance annotations from {ann_file}...")
@@ -65,8 +67,21 @@ class CocoMultiTaskDataset(torch.utils.data.Dataset):
         print(f"Loading keypoint annotations from {kp_ann_file}...")
         self.coco_kp = COCO(kp_ann_file)
 
-        # Get all image IDs that have instance annotations
-        self.img_ids = sorted(list(self.coco_ins.imgs.keys()))
+        if self.person_only:
+            # Get person category_id from COCO (category_id=1 for "person")
+            cat_ids = self.coco_ins.getCatIds(catNms=["person"])
+            assert len(cat_ids) > 0, "Person category not found in annotations!"
+            self.person_cat_id = cat_ids[0]  # typically 1
+
+            # Get all image IDs that contain person instances
+            img_ids_with_person = self.coco_ins.getImgIds(catIds=cat_ids)
+            self.img_ids = sorted(img_ids_with_person)
+
+            print(f"[Person-Only Mode] Filtering to 'person' category (cat_id={self.person_cat_id})")
+        else:
+            # Use all image IDs
+            self.img_ids = sorted(list(self.coco_ins.imgs.keys()))
+            self.person_cat_id = None
 
         # Build mapping: img_id -> keypoint annotations (by ann_id)
         self.kp_by_image = {}
@@ -81,7 +96,8 @@ class CocoMultiTaskDataset(torch.utils.data.Dataset):
                     kp_dict[ann["id"]] = ann
             self.kp_by_image[img_id] = kp_dict
 
-        print(f"Dataset loaded: {len(self.img_ids)} images")
+        print(f"Dataset loaded: {len(self.img_ids)} images" +
+              (f" (person-only)" if self.person_only else ""))
 
     def __len__(self) -> int:
         return len(self.img_ids)
@@ -159,6 +175,10 @@ class CocoMultiTaskDataset(torch.utils.data.Dataset):
             if ann.get("iscrowd", 0):
                 continue
 
+            # In person-only mode, skip non-person annotations
+            if self.person_only and ann["category_id"] != self.person_cat_id:
+                continue
+
             # Bounding box [x, y, w, h] → [x1, y1, x2, y2]
             bbox = ann["bbox"]
             x1, y1, bw, bh = bbox
@@ -170,7 +190,11 @@ class CocoMultiTaskDataset(torch.utils.data.Dataset):
                 continue
 
             boxes.append([x1, y1, x2, y2])
-            labels.append(ann["category_id"])
+            # In person-only mode, remap all labels to 1 (person class)
+            if self.person_only:
+                labels.append(1)
+            else:
+                labels.append(ann["category_id"])
 
             # Instance segmentation mask
             if "segmentation" in ann:
