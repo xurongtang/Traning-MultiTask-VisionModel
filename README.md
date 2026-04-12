@@ -226,7 +226,7 @@ self.model.roi_heads.keypoint_predictor = keypoint_predictor
 
 **验证**：修复后推理输出包含 `keypoints`（shape: `[N, 17, 3]`）和 `keypoints_scores`，关键点检测正常工作。
 
-### 2. 使用全量数据集和标签进行训练，12 epoch
+### 2. 使用全量数据集和标签进行训练，12 epoch（2026-04-12）
 
 使用 COCO2017 全部 80 个类别进行多任务训练，训练 12 个 epoch 后的推理结果如下：
 
@@ -244,7 +244,7 @@ self.model.roi_heads.keypoint_predictor = keypoint_predictor
 
 **结论**：多任务联合训练中，关键点检测任务应当限定在 person 类别上进行。
 
-### 3. 修改为仅使用 "person" 单类别进行多任务训练
+### 3. 修改为仅使用 "person" 单类别进行多任务训练（2026-04-12）
 
 针对上述问题，将训练数据和模型配置修改为仅针对 **person** 类别：
 
