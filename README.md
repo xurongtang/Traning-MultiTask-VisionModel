@@ -284,3 +284,39 @@ class CocoMultiTaskDataset:
 </task_progress>
 </task_progress>
 </write_to_file>
+
+#### 训练结果
+
+> Person-only 模式，12 epoch 训练后的验证集可视化结果。
+
+<table>
+  <tr>
+    <td align="center"><b>实例分割</b></td>
+    <td align="center"><b>关键点检测</b></td>
+  </tr>
+  <tr>
+    <td><img src="asset/epoch_012_instance_seg.png" alt="实例分割" width="400"/></td>
+    <td><img src="asset/epoch_012_keypoints.png" alt="关键点检测" width="400"/></td>
+  </tr>
+</table>
+
+#### 测试结果
+
+使用训练好的模型进行推理测试：
+
+```bash
+python test_savepth.py
+```
+
+<table>
+  <tr>
+    <td align="center"><b>关键点检测</b></td>
+    <td align="center"><b>实例分割掩码</b></td>
+    <td align="center"><b>综合结果</b></td>
+  </tr>
+  <tr>
+    <td><img src="asset/418_res/test_savepth_keypoints.png" alt="关键点检测" width="250"/></td>
+    <td><img src="asset/418_res/test_savepth_masks.png" alt="实例分割掩码" width="250"/></td>
+    <td><img src="asset/418_res/test_savepth_result.png" alt="综合结果" width="250"/></td>
+  </tr>
+</table>
