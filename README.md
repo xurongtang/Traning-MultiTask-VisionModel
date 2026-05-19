@@ -136,10 +136,11 @@ python train.py \
 python train.py --resume ./output/checkpoint_epoch_10.pth
 ```
 
-多 GPU 训练：
+多 GPU 训练（DDP，需使用 `torchrun`）：
 
 ```bash
-python train.py --device cuda:0,1
+torchrun --nproc_per_node=2 train.py --device cuda --batch_size 4
+# 或: ./training.sh
 ```
 
 ### 4. 训练参数说明
@@ -320,3 +321,57 @@ python test_savepth.py
     <td><img src="asset/418_res/test_savepth_result.png" alt="综合结果" width="250"/></td>
   </tr>
 </table>
+
+### 4. 多卡训练与关键点数据增强修复（2026-05-19）
+
+本次修复针对两类问题：**多 GPU 分布式训练不可用/不稳定**，以及 **训练后关键点检测姿态错乱**。
+
+#### 问题分析
+
+| 问题 | 现象 | 根因 |
+|------|------|------|
+| 多卡训练 | 使用 `--device cuda:0,1` 时易出现同步异常、日志重复、checkpoint 保存错误 | 原 `DataParallel` 单进程多卡方案与当前训练流程（损失聚合、日志、保存）不匹配 |
+| 关键点检测 | 水平翻转增强后左右肩、肘、膝等关节对调错误，推理骨架扭曲 | `CocoTransform` 仅对 x 坐标做镜像，**未按 COCO 规范交换左右对称关键点索引** |
+
+#### 修改内容
+
+| 文件 | 修改说明 |
+|------|----------|
+| `train.py` | 引入 `torch.distributed` + `DistributedDataParallel`；支持 `torchrun` 启动；跨卡 `all_reduce` 聚合 loss；仅 rank 0 写日志与保存 checkpoint |
+| `datasets/coco_dataset.py` | 新增 `COCO_KEYPOINT_FLIP_INDICES`，翻转时同步交换左右关节；`build_dataloaders` 支持 `DistributedSampler` |
+| `loss/multitask_loss.py` | RPN 损失键名与 torchvision 对齐（`loss_objectness` / `loss_rpn_box_reg`），避免多任务权重失效 |
+| `logger/training_logger.py` | 增加 `enabled` 开关，非主进程禁用 TensorBoard |
+| `config.py` | 默认设备改为 `cuda`；`pin_memory` 与 `cuda:*` 子设备兼容 |
+| `training.sh` | 新增后台/前台双卡 DDP 训练启动脚本 |
+
+#### 多卡训练启动方式
+
+原 `python train.py --device cuda:0,1` 已弃用，请改用 **DDP + torchrun**：
+
+```bash
+# 前台双卡训练（示例：2 卡）
+torchrun --nproc_per_node=2 train.py --device cuda --batch_size 4
+
+# 或使用项目脚本（默认 2 卡，日志写入 train.log）
+./training.sh              # 后台
+./training.sh --foreground # 前台
+```
+
+#### 测试结果
+
+使用 `asset/0519_best_model.pth` 在测试图上推理（`python test_savepth.py`）：
+
+<table>
+  <tr>
+    <td align="center"><b>关键点检测</b></td>
+    <td align="center"><b>实例分割掩码</b></td>
+    <td align="center"><b>综合结果</b></td>
+  </tr>
+  <tr>
+    <td><img src="asset/519_res/test_savepth_keypoints.png" alt="0519 关键点检测" width="250"/></td>
+    <td><img src="asset/519_res/test_savepth_masks.png" alt="0519 实例分割掩码" width="250"/></td>
+    <td><img src="asset/519_res/test_savepth_result.png" alt="0519 综合结果" width="250"/></td>
+  </tr>
+</table>
+
+与 04-18 版本对比，关键点骨架左右对称关系已恢复正常，实例分割掩码保持稳定。

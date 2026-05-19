@@ -29,7 +29,7 @@ class Config:
     backbone_name: str = "resnet50"
     pretrained_backbone: bool = True
     trainable_layers: int = 3  # Number of trainable backbone layers
-    num_classes: int = 2   # Person-only: 1 class (person) + 1 background
+    num_classes: int = 2  
     num_keypoints: int = 17  # COCO person keypoints
     keypoint_names: tuple = (
         "nose", "left_eye", "right_eye", "left_ear", "right_ear",
@@ -65,10 +65,10 @@ class Config:
     output_dir: str = "./output"
 
     # ── Device ──────────────────────────────────────────────
-    device: str = "cuda:1"  # "cpu" for local debug, "cuda" for server
+    device: str = "cuda"  # Use "cuda" by default; override with "cuda:1" if needed
 
     # ── Visualization ────────────────────────────────────────
-    vis_interval: int = 10            # Visualize every N epochs
+    vis_interval: int = 2            # Visualize every N epochs
     vis_num_samples: int = 100        # Number of random val images per task
     vis_score_threshold: float = 0.5  # Min detection score to draw
     vis_max_detections: int = 10      # Max detections per image

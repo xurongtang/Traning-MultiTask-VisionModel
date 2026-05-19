@@ -22,7 +22,7 @@ from config import Config
 from model.multitask_model import build_multitask_model
 
 # ── 路径配置 ──────────────────────────────────────────────
-pth_path = "/Users/xurongtang/workerFolder/MultiTaskTraining/asset/0418_best_model.pth"
+pth_path = "/Users/xurongtang/workerFolder/MultiTaskTraining/asset/0519_best_model.pth"
 test_path = "/Users/xurongtang/workerFolder/MultiTaskTraining/asset/image_test.png"
 output_dir = "/Users/xurongtang/workerFolder/MultiTaskTraining/test_output"
 

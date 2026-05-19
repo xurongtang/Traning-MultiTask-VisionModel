@@ -56,8 +56,8 @@ class MultiTaskLoss:
         loss_weight_keypoint: float = 1.0,
     ):
         self.weights = {
-            "loss_rpn_class": loss_weight_rpn,
-            "loss_rpn_bbox_reg": loss_weight_rpn,
+            "loss_objectness": loss_weight_rpn,
+            "loss_rpn_box_reg": loss_weight_rpn,
             "loss_classifier": loss_weight_box,
             "loss_box_reg": loss_weight_box,
             "loss_mask": loss_weight_mask,
@@ -196,8 +196,8 @@ if __name__ == "__main__":
 
     # Simulate loss dict from model
     fake_losses = {
-        "loss_rpn_class": torch.tensor(0.5),
-        "loss_rpn_bbox_reg": torch.tensor(0.3),
+        "loss_objectness": torch.tensor(0.5),
+        "loss_rpn_box_reg": torch.tensor(0.3),
         "loss_classifier": torch.tensor(0.4),
         "loss_box_reg": torch.tensor(0.2),
         "loss_mask": torch.tensor(0.6),

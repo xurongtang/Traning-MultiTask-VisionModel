@@ -45,19 +45,22 @@ class TrainingLogger:
         log_dir: str = "./runs",
         experiment_name: Optional[str] = None,
         use_tensorboard: bool = True,
+        enabled: bool = True,
     ):
+        self.enabled = enabled
         if experiment_name is None:
             experiment_name = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         self.log_dir = os.path.join(log_dir, experiment_name)
-        os.makedirs(self.log_dir, exist_ok=True)
+        if self.enabled:
+            os.makedirs(self.log_dir, exist_ok=True)
 
         # TensorBoard writer
         self.writer = None
-        if use_tensorboard and HAS_TENSORBOARD:
+        if self.enabled and use_tensorboard and HAS_TENSORBOARD:
             self.writer = SummaryWriter(self.log_dir)
             print(f"TensorBoard logging to: {self.log_dir}")
-        else:
+        elif self.enabled:
             print("TensorBoard logging disabled.")
 
         # Training statistics
@@ -158,6 +161,8 @@ class TrainingLogger:
 
     def start_epoch(self, epoch: int):
         """Mark the start of an epoch."""
+        if not self.enabled:
+            return
         self.current_epoch = epoch
         self.epoch_start_time = time.time()
         self.epoch_losses = []
@@ -174,6 +179,8 @@ class TrainingLogger:
             avg_loss: Average loss for this epoch
             loss_dict: Optional detailed loss breakdown
         """
+        if not self.enabled:
+            return
         elapsed = time.time() - self.epoch_start_time if self.epoch_start_time else 0
 
         print(f"\nEpoch {epoch + 1} Summary:")
@@ -213,6 +220,8 @@ class TrainingLogger:
             loss_dict: Dictionary of losses
             lr: Current learning rate
         """
+        if not self.enabled:
+            return
         total_loss = sum(loss_dict.values())
 
         # Accumulate for epoch average
@@ -227,6 +236,8 @@ class TrainingLogger:
 
     def save_history(self):
         """Save training history to JSON file."""
+        if not self.enabled:
+            return
         history_path = os.path.join(self.log_dir, "training_history.json")
         # Convert all values to Python types
         history = {}
@@ -241,17 +252,20 @@ class TrainingLogger:
 
     def close(self):
         """Close the logger and TensorBoard writer."""
+        if not self.enabled:
+            return
         self.save_history()
         if self.writer is not None:
             self.writer.close()
             print("TensorBoard writer closed.")
 
 
-def build_logger(cfg) -> TrainingLogger:
+def build_logger(cfg, enabled: bool = True) -> TrainingLogger:
     """Build training logger from configuration."""
     return TrainingLogger(
         log_dir=cfg.log_dir,
         use_tensorboard=True,
+        enabled=enabled,
     )
 
 

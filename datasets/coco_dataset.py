@@ -27,6 +27,10 @@ import numpy as np
 from PIL import Image
 from typing import List, Dict, Optional, Tuple
 
+COCO_KEYPOINT_FLIP_INDICES = (
+    0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15
+)
+
 
 class CocoMultiTaskDataset(torch.utils.data.Dataset):
     """
@@ -267,11 +271,23 @@ class CocoTransform:
 
                 # Flip keypoints
                 if "keypoints" in target and len(target["keypoints"]) > 0:
-                    keypoints = target["keypoints"]
-                    keypoints[:, :, 0] = w - keypoints[:, :, 0]
+                    keypoints = target["keypoints"].clone()
+                    keypoints = self._flip_coco_person_keypoints(keypoints, w)
                     target["keypoints"] = keypoints
 
         return image, target
+
+    @staticmethod
+    def _flip_coco_person_keypoints(keypoints: torch.Tensor, width: int) -> torch.Tensor:
+        """Flip COCO keypoints horizontally and swap left/right joints."""
+        flipped = keypoints[:, COCO_KEYPOINT_FLIP_INDICES, :].clone()
+        visible = flipped[:, :, 2] > 0
+
+        flipped[:, :, 0] = width - flipped[:, :, 0]
+        flipped[:, :, 0][~visible] = 0
+        flipped[:, :, 1][~visible] = 0
+
+        return flipped
 
 def collate_fn(batch):
     """
@@ -281,7 +297,7 @@ def collate_fn(batch):
     images, targets = zip(*batch)
     return list(images), list(targets)
 
-def build_dataloaders(cfg, mode="train"):
+def build_dataloaders(cfg, mode="train", distributed: bool = False):
     """
     Build train and val dataloaders.
 
@@ -296,6 +312,8 @@ def build_dataloaders(cfg, mode="train"):
     """
     datasets = {}
 
+    use_pin_memory = str(cfg.device).startswith("cuda")
+
     if mode in ("train", "both"):
         train_dataset = CocoMultiTaskDataset(
             img_root=cfg.get_full_train_img_dir(),
@@ -304,13 +322,20 @@ def build_dataloaders(cfg, mode="train"):
             transforms=CocoTransform(train=True),
             num_keypoints=cfg.num_keypoints,
         )
+        train_sampler = None
+        if distributed:
+            train_sampler = torch.utils.data.distributed.DistributedSampler(
+                train_dataset,
+                shuffle=True,
+            )
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             batch_size=cfg.batch_size,
-            shuffle=True,
+            shuffle=train_sampler is None,
+            sampler=train_sampler,
             num_workers=cfg.num_workers,
             collate_fn=collate_fn,
-            pin_memory=True if cfg.device == "cuda" else False,
+            pin_memory=use_pin_memory,
         )
         datasets["train"] = train_loader
 
@@ -322,13 +347,20 @@ def build_dataloaders(cfg, mode="train"):
             transforms=CocoTransform(train=False),
             num_keypoints=cfg.num_keypoints,
         )
+        val_sampler = None
+        if distributed:
+            val_sampler = torch.utils.data.distributed.DistributedSampler(
+                val_dataset,
+                shuffle=False,
+            )
         val_loader = torch.utils.data.DataLoader(
             val_dataset,
             batch_size=cfg.batch_size,
             shuffle=False,
+            sampler=val_sampler,
             num_workers=cfg.num_workers,
             collate_fn=collate_fn,
-            pin_memory=True if cfg.device == "cuda" else False,
+            pin_memory=use_pin_memory,
         )
         datasets["val"] = val_loader
 
